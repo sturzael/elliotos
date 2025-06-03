@@ -16,6 +16,8 @@ from backend.fetch_health import fetch_health_data
 from backend.fetch_nutrition import fetch_nutrition_data
 from backend.fetch_news import fetch_news_data
 from backend.fetch_chelsea import fetch_chelsea_data
+from backend.fetch_apple_health import fetch_apple_health_data
+from backend.fetch_clickup import fetch_clickup_data
 from config.settings import settings
 from utils.logger import get_logger
 
@@ -33,7 +35,9 @@ class DataAggregator:
             "health": fetch_health_data,
             "nutrition": fetch_nutrition_data,
             "news": fetch_news_data,
-            "chelsea": fetch_chelsea_data
+            "chelsea": fetch_chelsea_data,
+            "apple_health": fetch_apple_health_data,
+            "clickup": fetch_clickup_data
         }
     
     def fetch_all_data(self, parallel: bool = True) -> Dict[str, Any]:

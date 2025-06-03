@@ -73,6 +73,7 @@ class Settings:
     READWISE_TOKEN: str = os.getenv("READWISE_TOKEN", "")
     NOTION_TOKEN: str = os.getenv("NOTION_TOKEN", "")
     NOTION_DATABASE_ID: str = os.getenv("NOTION_DATABASE_ID", "")
+    CLICKUP_API_TOKEN: str = os.getenv("CLICKUP_API_TOKEN", "")
     
     # Application Settings
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -114,6 +115,7 @@ class Settings:
             "github": bool(self.GITHUB_TOKEN),
             "readwise": bool(self.READWISE_TOKEN),
             "notion": bool(self.NOTION_TOKEN),
+            "clickup": bool(self.CLICKUP_API_TOKEN),
             "macos_tracking": self.MACOS_APP_USAGE_ENABLED,
         }
 

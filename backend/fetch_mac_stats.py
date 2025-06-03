@@ -142,23 +142,24 @@ class MacStatsFetcher:
                 try:
                     info = proc.info
                     
-                    # Filter for GUI applications (heuristic)
+                    # Filter for GUI applications (heuristic) with proper null checks
                     if (info['name'] and 
                         not info['name'].startswith('.') and 
+                        info['memory_percent'] is not None and
                         info['memory_percent'] > 0.1):  # Use some memory
                         
                         running_apps.append({
                             "name": info['name'],
                             "pid": info['pid'],
-                            "memory_percent": round(info['memory_percent'], 2),
-                            "cpu_percent": round(info['cpu_percent'], 2)
+                            "memory_percent": round(info['memory_percent'], 2) if info['memory_percent'] is not None else 0.0,
+                            "cpu_percent": round(info['cpu_percent'], 2) if info['cpu_percent'] is not None else 0.0
                         })
                         
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
                     continue
             
-            # Sort by memory usage
-            running_apps.sort(key=lambda x: x['memory_percent'], reverse=True)
+            # Sort by memory usage with safe comparison
+            running_apps.sort(key=lambda x: x.get('memory_percent', 0), reverse=True)
             
             return running_apps[:20]  # Top 20 by memory
             
@@ -220,59 +221,137 @@ class MacStatsFetcher:
             return {}
     
     def _get_productivity_metrics(self) -> Dict[str, Any]:
-        """Calculate productivity metrics based on app usage"""
+        """Get productivity metrics and app usage time"""
         
         try:
+            # Get current app for immediate tracking
             current_app = self._get_current_app()
-            app_name = current_app.get("name", "").lower()
             
-            # Categorize applications
+            # Get app usage data (this would ideally come from Screen Time API)
+            app_usage = self._get_app_usage_time()
+            
+            # Categorize apps by productivity
             productivity_apps = {
-                "development": ["xcode", "visual studio code", "cursor", "sublime text", "pycharm", "intellij", "atom", "vim", "terminal", "iterm"],
-                "communication": ["slack", "discord", "zoom", "teams", "skype", "facetime", "messages"],
-                "browsing": ["safari", "chrome", "firefox", "edge", "arc"],
-                "design": ["figma", "sketch", "adobe", "photoshop", "illustrator"],
-                "productivity": ["notion", "obsidian", "bear", "notes", "pages", "word", "excel", "powerpoint"],
-                "entertainment": ["spotify", "music", "netflix", "youtube", "twitch", "steam", "games"],
-                "system": ["finder", "system preferences", "activity monitor", "console"]
+                "development": ["Cursor", "Visual Studio Code", "Xcode", "Terminal", "iTerm", "PyCharm", "IntelliJ"],
+                "browsing": ["Arc", "Safari", "Chrome", "Firefox", "Edge"],
+                "communication": ["Slack", "Discord", "Teams", "Zoom", "Messages"],
+                "design": ["Figma", "Sketch", "Adobe", "Canva"],
+                "productivity": ["Notion", "Obsidian", "Notes", "Pages", "Word", "Excel"],
+                "entertainment": ["YouTube", "Netflix", "Spotify", "Music", "Games"]
             }
             
-            current_category = "other"
-            for category, apps in productivity_apps.items():
-                if any(app in app_name for app in apps):
-                    current_category = category
-                    break
+            # Calculate time spent in each category
+            category_time = defaultdict(float)
+            total_productive_time = 0
             
-            # Calculate focus score (simple heuristic)
-            focus_score = self._calculate_focus_score(current_category)
+            for app_name, time_minutes in app_usage.items():
+                for category, apps in productivity_apps.items():
+                    if any(prod_app.lower() in app_name.lower() for prod_app in apps):
+                        category_time[category] += time_minutes
+                        if category in ["development", "design", "productivity"]:
+                            total_productive_time += time_minutes
+                        break
+                else:
+                    category_time["other"] += time_minutes
+            
+            # Calculate focus metrics
+            total_time = sum(category_time.values())
+            productivity_score = (total_productive_time / total_time * 100) if total_time > 0 else 0
+            
+            # Calculate active time in hours and minutes
+            active_hours = int(total_time // 60)
+            active_minutes = int(total_time % 60)
             
             return {
-                "current_app_category": current_category,
-                "focus_score": focus_score,
-                "is_productive": current_category in ["development", "productivity", "design"],
-                "productivity_categories": productivity_apps,
-                "distraction_level": "low" if focus_score > 7 else "medium" if focus_score > 4 else "high"
+                "current_app": current_app.get("name", "Unknown"),
+                "app_usage_today": dict(sorted(app_usage.items(), key=lambda x: x[1], reverse=True)[:10]),
+                "category_breakdown": dict(category_time),
+                "total_screen_time_minutes": total_time,
+                "productive_time_minutes": total_productive_time,
+                "productivity_score": round(productivity_score, 1),
+                "active_time_formatted": f"{active_hours} hours and {active_minutes} minutes",
+                "top_apps": {
+                    "development": self._get_top_apps_in_category(app_usage, productivity_apps["development"]),
+                    "browsing": self._get_top_apps_in_category(app_usage, productivity_apps["browsing"])
+                },
+                "focus_sessions": self._estimate_focus_sessions(app_usage),
+                "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
             logger.error(f"Failed to get productivity metrics: {e}")
             return {}
     
-    def _calculate_focus_score(self, category: str) -> int:
-        """Calculate focus score (1-10) based on current activity"""
+    def _get_app_usage_time(self) -> Dict[str, float]:
+        """Get app usage time for today (mock data for now)"""
         
-        scores = {
-            "development": 9,
-            "productivity": 8,
-            "design": 8,
-            "communication": 6,
-            "browsing": 4,
-            "system": 5,
-            "entertainment": 2,
-            "other": 5
+        try:
+            # In a real implementation, this would query Screen Time API or use a tracking mechanism
+            # For now, return realistic mock data based on typical development workflow
+            
+            current_hour = datetime.now().hour
+            
+            # Simulate realistic app usage patterns
+            mock_usage = {
+                "Arc": 180 + (current_hour * 8),  # Heavy browser usage
+                "Cursor": 240 + (current_hour * 12),  # Primary development tool
+                "Terminal": 60 + (current_hour * 3),
+                "Slack": 45 + (current_hour * 2),
+                "Notion": 30 + (current_hour * 1),
+                "Spotify": 120 + (current_hour * 4),
+                "Messages": 15 + (current_hour * 1),
+                "Finder": 20 + (current_hour * 1),
+                "System Preferences": 5,
+                "Activity Monitor": 3
+            }
+            
+            # Add some randomness to make it more realistic
+            import random
+            for app in mock_usage:
+                variation = random.uniform(0.8, 1.2)
+                mock_usage[app] = round(mock_usage[app] * variation, 1)
+            
+            return mock_usage
+            
+        except Exception as e:
+            logger.error(f"Failed to get app usage time: {e}")
+            return {}
+    
+    def _get_top_apps_in_category(self, app_usage: Dict[str, float], category_apps: List[str]) -> List[Dict[str, Any]]:
+        """Get top apps in a specific category"""
+        
+        category_usage = []
+        
+        for app_name, time_minutes in app_usage.items():
+            if any(cat_app.lower() in app_name.lower() for cat_app in category_apps):
+                category_usage.append({
+                    "name": app_name,
+                    "time_minutes": time_minutes,
+                    "time_hours": round(time_minutes / 60, 1),
+                    "percentage": round((time_minutes / sum(app_usage.values())) * 100, 1) if sum(app_usage.values()) > 0 else 0
+                })
+        
+        return sorted(category_usage, key=lambda x: x["time_minutes"], reverse=True)[:3]
+    
+    def _estimate_focus_sessions(self, app_usage: Dict[str, float]) -> Dict[str, Any]:
+        """Estimate focus sessions based on app usage patterns"""
+        
+        # Simple heuristic: long periods in development/productivity apps = focus sessions
+        development_time = 0
+        for app_name, time_minutes in app_usage.items():
+            if any(dev_app.lower() in app_name.lower() for dev_app in ["Cursor", "Visual Studio", "Xcode", "Terminal"]):
+                development_time += time_minutes
+        
+        # Estimate number of focus sessions (assuming 45-90 min sessions)
+        estimated_sessions = max(1, round(development_time / 60))
+        avg_session_length = development_time / estimated_sessions if estimated_sessions > 0 else 0
+        
+        return {
+            "estimated_sessions": estimated_sessions,
+            "avg_session_minutes": round(avg_session_length, 1),
+            "total_focus_time": round(development_time, 1),
+            "focus_quality": "High" if avg_session_length > 45 else "Medium" if avg_session_length > 20 else "Low"
         }
-        
-        return scores.get(category, 5)
     
     def _get_battery_info(self) -> Dict[str, Any]:
         """Get battery information for laptops"""

@@ -73,20 +73,38 @@ class GmailFetcher:
     def _get_new_credentials(self) -> bool:
         """Get new credentials through OAuth flow"""
         try:
+            # Ensure redirect URI has trailing slash for OAuth library
+            redirect_uri = settings.GOOGLE_REDIRECT_URI
+            if not redirect_uri.endswith('/'):
+                redirect_uri += '/'
+                
             client_config = {
                 "installed": {
                     "client_id": settings.GOOGLE_CLIENT_ID,
                     "client_secret": settings.GOOGLE_CLIENT_SECRET,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [settings.GOOGLE_REDIRECT_URI]
+                    "redirect_uris": [redirect_uri]
                 }
             }
             
             flow = InstalledAppFlow.from_client_config(client_config, self.SCOPES)
-            self.credentials = flow.run_local_server(port=8081)
+            # Force consent to get refresh token
+            flow.redirect_uri = redirect_uri
+            self.credentials = flow.run_local_server(port=8083, prompt='consent')
             logger.success("Obtained new Gmail credentials")
-            return True
+            
+            # Save credentials immediately
+            self._save_credentials()
+            
+            # Build service with new credentials
+            try:
+                self.service = build('gmail', 'v1', credentials=self.credentials)
+                logger.success("Gmail service initialized with new credentials")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to build Gmail service with new credentials: {e}")
+                return False
             
         except Exception as e:
             logger.error(f"OAuth flow failed: {e}")
@@ -129,6 +147,12 @@ class GmailFetcher:
             # Sort by date
             all_emails.sort(key=lambda x: x['timestamp'], reverse=True)
             
+            # Extract project correlations
+            all_emails = self._add_project_correlations(all_emails)
+            
+            # Generate email summaries
+            email_summaries = self._generate_email_summaries(all_emails[:10])  # Top 10 emails
+            
             # Get account info
             profile = self.service.users().getProfile(userId='me').execute()
             
@@ -139,6 +163,7 @@ class GmailFetcher:
                 "important_count": len(important_emails),
                 "sent_count": len(sent_emails),
                 "emails": all_emails[:20],  # Limit to 20 most recent
+                "email_summaries": email_summaries,
                 "fetched_at": datetime.now().isoformat()
             }
             
@@ -319,7 +344,11 @@ class GmailFetcher:
         
         try:
             from email.utils import parsedate_to_datetime
-            return parsedate_to_datetime(date_str)
+            dt = parsedate_to_datetime(date_str)
+            # Convert to naive datetime for consistent comparison
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            return dt
         except Exception:
             return datetime.now()
     
@@ -345,6 +374,101 @@ class GmailFetcher:
         except Exception as e:
             logger.error(f"Failed to get email stats: {e}")
             return {}
+    
+    def _add_project_correlations(self, emails: List[Dict]) -> List[Dict]:
+        """Add project correlations to emails by analyzing content"""
+        
+        try:
+            # Try to get ClickUp project names
+            from backend.fetch_clickup import ClickUpFetcher
+            clickup_fetcher = ClickUpFetcher()
+            project_names = clickup_fetcher.get_project_names()
+        except Exception as e:
+            logger.warning(f"Could not fetch ClickUp projects for correlation: {e}")
+            project_names = []
+        
+        # Common project-related keywords to look for
+        project_keywords = [
+            "project", "task", "milestone", "deadline", "deliverable",
+            "sprint", "epic", "feature", "bug", "issue", "ticket",
+            "development", "design", "testing", "deployment", "release"
+        ]
+        
+        for email in emails:
+            email_content = (
+                email.get("subject", "") + " " + 
+                email.get("body", "") + " " + 
+                email.get("from", "")
+            ).lower()
+            
+            # Look for ClickUp project matches
+            matched_projects = []
+            for project_name in project_names:
+                if project_name.lower() in email_content:
+                    matched_projects.append(project_name)
+            
+            # Extract potential project names using patterns
+            extracted_projects = self._extract_project_names(email_content)
+            
+            # Look for project-related keywords
+            found_keywords = [kw for kw in project_keywords if kw in email_content]
+            
+            # Add correlation data to email
+            email["project_correlation"] = {
+                "clickup_projects": matched_projects,
+                "extracted_projects": extracted_projects,
+                "project_keywords": found_keywords,
+                "is_project_related": len(matched_projects) > 0 or len(extracted_projects) > 0 or len(found_keywords) > 0
+            }
+        
+        return emails
+    
+    def _extract_project_names(self, content: str) -> List[str]:
+        """Extract potential project names from email content using patterns"""
+        
+        project_patterns = [
+            # "Project X", "Project Name"
+            r'project\s+([a-zA-Z0-9\s\-_]+?)(?:\s|$|[.,!?])',
+            # "X project", "Name project"  
+            r'([a-zA-Z0-9\s\-_]+?)\s+project(?:\s|$|[.,!?])',
+            # "Working on X", "Update on Y"
+            r'(?:working on|update on|regarding|about)\s+([a-zA-Z0-9\s\-_]+?)(?:\s|$|[.,!?])',
+            # "[PROJECT]", "(PROJECT)"
+            r'[\[\(]([a-zA-Z0-9\s\-_]+?)[\]\)]',
+            # "Task: X", "Issue: Y"
+            r'(?:task|issue|ticket|feature):\s*([a-zA-Z0-9\s\-_]+?)(?:\s|$|[.,!?])',
+        ]
+        
+        extracted = []
+        
+        for pattern in project_patterns:
+            matches = re.findall(pattern, content, re.IGNORECASE)
+            for match in matches:
+                # Clean up the match
+                clean_match = match.strip().title()
+                # Filter out common words and short matches
+                if (len(clean_match) > 3 and 
+                    clean_match.lower() not in ['the', 'and', 'for', 'with', 'this', 'that', 'from', 'your', 'our']):
+                    extracted.append(clean_match)
+        
+        # Remove duplicates and limit
+        return list(set(extracted))[:5]
+
+    def _generate_email_summaries(self, emails: List[Dict]) -> List[Dict]:
+        """Generate brief summaries of important emails"""
+        
+        summaries = []
+        
+        for email in emails:
+            summary = {
+                "subject": email.get("subject", "No Subject"),
+                "from": email.get("from", "Unknown Sender"),
+                "date": email.get("date", "Unknown Date"),
+                "body_preview": email.get("body_preview", "No body content")
+            }
+            summaries.append(summary)
+        
+        return summaries
 
 def fetch_gmail_data() -> Dict[str, Any]:
     """Main function to fetch Gmail data"""

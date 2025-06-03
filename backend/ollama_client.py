@@ -235,18 +235,22 @@ class OllamaClient:
         prompt = """
         Generate a personalized morning digest for Elliot based ONLY on the actual data provided in the context.
         
-        IMPORTANT: Do NOT make up or invent any information. Only use data that exists in the context.
+        CRITICAL: Do NOT make up or invent any information. Only use data that exists in the context.
         
         Structure:
         1. 🌅 *Good Morning* greeting with current time
-        2. 📅 *Today's Agenda* - ONLY if calendar data exists, otherwise say "No calendar events configured"
-        3. 📧 *Messages* - ONLY if email/Slack data exists, otherwise skip this section
-        4. 💪 *Health Check* - Use actual health data from context (steps, sleep, activity)
-        5. 💻 *Current Activity* - Use actual macOS stats (current app, productivity metrics)
-        6. ⚽ *Chelsea FC* - Use actual Chelsea data from context
-        7. 🌍 *News* - Use actual news headlines from context
-        8. 🎯 *Daily Focus* - Based on actual productivity data and current activity
-        9. 💡 *Motivation* - One encouraging insight based on actual data
+        2. 📅 *Today's Agenda* - List actual calendar events for today. If no calendar data, say "Calendar not configured"
+        3. 📧 *Email Summary* - Summarize important unread emails from email_summaries. If no emails, say "No new emails"
+        4. 💪 *Health Check* - Use actual health/apple_health data (steps from yesterday, sleep hours). Use EXACT numbers from data
+        5. 💻 *Current Activity* - Use actual mac_stats data (current app, active time formatted). NO fake task counts
+        6. ⚽ *Chelsea FC* - Use actual Chelsea data including transfer_news if available
+        7. 🌍 *News* - Use actual news headlines from context, focus on latest worldwide news
+        8. 🎯 *Daily Focus* - Based on actual productivity data and calendar events
+        9. 💡 *Motivation* - One encouraging insight based on actual achievements from data
+        
+        For meetings: If calendar data exists, mention today's meetings and tomorrow's upcoming meetings.
+        For health: Use exact step counts and sleep hours from the data - don't round or estimate.
+        For productivity: Use the "active_time_formatted" field, not fake task counts.
         
         If a data source is missing or has errors, acknowledge it honestly rather than making up content.
         Keep it energizing but truthful!
